@@ -7,7 +7,7 @@ from typing import Dict, Optional
 import einops
 import torch
 from huggingface_hub import HfApi
-from transformers import AutoConfig, AutoModelForCausalLM, BertForPreTraining
+from transformers import AutoConfig, AutoModelForCausalLM, BertForPreTraining, PretrainedConfig
 
 import transformer_lens.utils as utils
 from transformer_lens.HookedTransformerConfig import HookedTransformerConfig
@@ -475,6 +475,15 @@ MODEL_ALIASES = {
     ],
 }
 
+CUSTOM_CONFIG_ALIASES = {
+    "gptj": "GPTJForCausalLM",
+    "gpt2": "GPT2LMHeadModel",
+    "bert": "BertForMaskedLM",
+    "gpt_neo": "GPTNeoForCausalLM",
+    "opt": "OPTForCausalLM",
+    "llama": "LlamaForCausalLM",
+}
+
 # Sets a default model alias, by convention the first one in the model alias table, else the official name if it has no aliases
 DEFAULT_MODEL_ALIASES = [
     MODEL_ALIASES[name][0] if name in MODEL_ALIASES else name
@@ -510,7 +519,7 @@ def get_official_model_name(model_name: str):
     return official_model_name
 
 
-def convert_hf_model_config(model_name: str, **kwargs):
+def convert_hf_model_config(model_name: str, hf_config: Optional[PretrainedConfig], **kwargs):
     """
     Returns the model config for a HuggingFace model, converted to a dictionary
     in the HookedTransformerConfig format.
@@ -520,11 +529,14 @@ def convert_hf_model_config(model_name: str, **kwargs):
     # In case the user passed in an alias
     official_model_name = get_official_model_name(model_name)
     # Load HuggingFace model config
-    if "llama" not in official_model_name.lower():
+
+    if "llama" not in official_model_name.lower() and hf_config is None:
         hf_config = AutoConfig.from_pretrained(official_model_name, **kwargs)
         architecture = hf_config.architectures[0]
-    else:
+    elif "llama" in official_model_name.lower():
         architecture = "LlamaForCausalLM"
+    else:
+        architecture = CUSTOM_CONFIG_ALIASES[hf_config.model_type]
     if official_model_name.startswith(
         ("llama-7b", "Llama-2-7b")
     ):  # same architecture for LLaMA and Llama-2
@@ -751,6 +763,7 @@ def convert_neel_model_config(official_model_name: str, **kwargs):
 
 def get_pretrained_model_config(
     model_name: str,
+    hf_config: Optional[PretrainedConfig] = None,
     checkpoint_index: Optional[int] = None,
     checkpoint_value: Optional[int] = None,
     fold_ln: bool = False,
@@ -800,7 +813,7 @@ def get_pretrained_model_config(
     ):
         cfg_dict = convert_neel_model_config(official_model_name, **kwargs)
     else:
-        cfg_dict = convert_hf_model_config(official_model_name, **kwargs)
+        cfg_dict = convert_hf_model_config(official_model_name, hf_config, **kwargs)
     # Processing common to both model types
     # Remove any prefix, saying the organization who made a model.
     cfg_dict["model_name"] = official_model_name.split("/")[-1]
@@ -1000,7 +1013,6 @@ def get_pretrained_state_dict(
 
         for param in hf_model.parameters():
             param.requires_grad = False
-
         if cfg.original_architecture == "GPT2LMHeadModel":
             state_dict = convert_gpt2_weights(hf_model, cfg)
         elif cfg.original_architecture == "GPTNeoForCausalLM":
